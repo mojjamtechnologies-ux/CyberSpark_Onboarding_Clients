@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch --env-file=.env src/server.js",
-    "start": "node --env-file=.env src/server.js"
+    "start": "node --env-file=.env src/server.js",
+    "build": "cd ../client && npm ci && npm run build"
   },
-  "engines": { "node": ">=20.6" },
+  "engines": {
+    "node": ">=20.6"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "cors": "^2.8.5",

@@ -18,7 +18,33 @@ const {
   BANK_ACCOUNT_NUMBER = "",
   PAYMENT_NOTE = "",
   ADMIN_ACCESS_TOKEN = "",
+  MAX_FILE_BYTES = String(5 * 1024 * 1024),
 } = process.env;
+
+const LEVELS = ["beginner", "intermediate", "advanced"];
+const STATUS_VALUES = ["pending", "confirmed", "rejected"];
+const MAX_FILE_SIZE_BYTES =
+  Number.parseInt(MAX_FILE_BYTES, 10) || 5 * 1024 * 1024;
+
+const supabase =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      })
+    : null;
+
+function ensureSupabase(res) {
+  if (!supabase) {
+    res
+      .status(500)
+      .json({ error: "Supabase is not configured on the server." });
+    return false;
+  }
+  return true;
+}
 
 const allowedOrigins = (CLIENT_ORIGIN || "http://localhost:5173")
   .split(",")
@@ -70,7 +96,7 @@ const submitLimiter = rateLimit({
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_FILE_BYTES, files: 1 },
+  limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1 },
 });
 
 // ---------- Helpers ----------

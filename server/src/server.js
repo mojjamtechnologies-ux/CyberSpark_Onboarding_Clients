@@ -474,32 +474,33 @@ app.patch(
 
 // Services with their prices for each level
 app.get("/api/services", async (_req, res) => {
-  const { data, error } = await supabase
-    .from("services")
-    .select(
-      "id, name, description, sort_order, service_prices(level, price_ngn, duration_minutes)",
-    )
-    .eq("active", true)
-    .order("sort_order");
+  try {
+    const { data, error } = await supabase
+      .from("services")
+      .select(
+        "id, name, description, sort_order, service_prices(level, price_ngn, duration_minutes)",
+      )
+      .eq("active", true)
+      .order("sort_order");
 
-  if (error) {
-    console.error("services query failed:", error.message);
+    if (error) {
+      console.error("services query failed:", error.message);
+      return res.status(500).json({ error: "Could not load services." });
+    }
+
+    const services = (data || []).map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      prices: Object.fromEntries(
+        (s.service_prices || []).map((p) => [p.level, { priceNgn: p.price_ngn, durationMinutes: p.duration_minutes }]),
+      ),
+    }));
+    return res.json({ services });
+  } catch (err) {
+    console.error("/api/services handler error:", err?.message || err);
     return res.status(500).json({ error: "Could not load services." });
   }
-
-  const services = data.map((s) => ({
-    id: s.id,
-    name: s.name,
-    description: s.description,
-    prices: Object.fromEntries(
-      s.service_prices.map((p) => [
-        p.level,
-        { priceNgn: p.price_ngn, durationMinutes: p.duration_minutes },
-      ]),
-    ),
-  }));
-  res.json({ services });
-});
 
 // Bank instructions (kept in server env so they are changed in one place)
 app.get("/api/payment-info", (_req, res) => {

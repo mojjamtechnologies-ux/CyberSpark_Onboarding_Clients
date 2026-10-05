@@ -723,6 +723,16 @@ input[type="file"] {
   color: var(--ink-soft);
 }
 
+.coupons-panel input {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.coupons-panel .submit {
+  padding: 8px 14px;
+}
+
 .button-group {
   display: flex;
   gap: 0.75rem;

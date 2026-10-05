@@ -26,6 +26,7 @@ create table if not exists service_prices (
   service_id text        not null references services(id) on delete cascade,
   level      skill_level not null,
   price_ngn  integer     not null check (price_ngn >= 0),
+  duration_minutes integer not null default 0,
   primary key (service_id, level)
 );
 
@@ -35,9 +36,11 @@ create table if not exists applications (
   service_id         text not null references services(id),
   level              skill_level not null,
   price_ngn          integer not null check (price_ngn >= 0),
+  duration_minutes   integer not null default 0,
   full_name          text not null,
   email              text not null,
   phone              text not null,
+  coupon_code        text,
   payment_reference  text not null,
   payment_proof_path text not null,
   status             application_status not null default 'pending',
@@ -143,3 +146,19 @@ alter table settings enable row level security;
 insert into settings (key, value) values
   ('banner_image_url', 'https://images.unsplash.com/photo-1552664730-d307ca884978?w=1200&h=300&fit=crop')
 on conflict (key) do nothing;
+
+-- ---------- Coupons table (promo codes for discounts) ----------
+create table if not exists coupons (
+  code text primary key,
+  discount_percent integer not null check (discount_percent >= 0 and discount_percent <= 100),
+  max_redemptions integer not null default 1,
+  redeemed integer not null default 0,
+  expires_at timestamptz,
+  active boolean not null default true,
+  created_by uuid references admins(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+alter table coupons enable row level security;
+
+-- Example: insert into coupons (code, discount_percent, max_redemptions) values ('WELCOME10', 10, 100);

@@ -114,6 +114,9 @@ function ClientOnboarding() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
   const [result, setResult] = useState(null);
+  const [couponInput, setCouponInput] = useState("");
+  const [appliedCoupon, setAppliedCoupon] = useState(null);
+  const [couponMessage, setCouponMessage] = useState("");
   const fileInput = useRef(null);
 
   useEffect(() => {
@@ -188,6 +191,38 @@ function ClientOnboarding() {
     setFile(f);
   }
 
+  const formatDuration = (mins) => {
+    const m = Number(mins || 0);
+    if (!m) return "";
+    if (m % 60 === 0) return `${m / 60} hours`;
+    if (m >= 60) return `${(m / 60).toFixed(1)} hours`;
+    return `${m} minutes`;
+  };
+
+  const applyCoupon = async () => {
+    setCouponMessage("");
+    const code = String(couponInput || "").trim();
+    if (!code) return setCouponMessage("Enter a coupon code to apply.");
+    try {
+      const res = await fetch(
+        `${API}/api/coupons/validate?code=${encodeURIComponent(code)}`,
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.valid) {
+        setAppliedCoupon(null);
+        setCouponMessage("Invalid or expired coupon.");
+        return;
+      }
+      setAppliedCoupon({
+        code: data.code,
+        discountPercent: data.discountPercent,
+      });
+      setCouponMessage(`Applied: ${data.discountPercent}% off`);
+    } catch (err) {
+      setCouponMessage("Could not validate coupon. Try again.");
+    }
+  };
+
   function validate() {
     const er = {};
     if (!form.serviceId) er.serviceId = "Choose a service.";
@@ -219,6 +254,8 @@ function ClientOnboarding() {
 
     const body = new FormData();
     Object.entries(form).forEach(([k, v]) => body.append(k, v.trim()));
+    if (appliedCoupon && appliedCoupon.code)
+      body.append("couponCode", appliedCoupon.code);
     body.append("proof", file);
 
     setSubmitting(true);
@@ -342,7 +379,14 @@ function ClientOnboarding() {
               {errors.level && <p className="field-error">{errors.level}</p>}
               {price != null && (
                 <p className="price-line" aria-live="polite">
-                  {service.name}, {form.level}: <strong>{naira(price)}</strong>
+                  {service.name}, {form.level}:{" "}
+                  <strong>{naira(price.priceNgn)}</strong>
+                  {price.durationMinutes ? (
+                    <span className="muted">
+                      {" "}
+                      &middot; {formatDuration(price.durationMinutes)}
+                    </span>
+                  ) : null}
                 </p>
               )}
             </fieldset>
@@ -464,7 +508,42 @@ function ClientOnboarding() {
               </div>
               <div className="total">
                 <dt>Total</dt>
-                <dd>{price != null ? naira(price) : "—"}</dd>
+                <dd>{price != null ? naira(price.priceNgn) : "—"}</dd>
+              </div>
+              {appliedCoupon && price != null && (
+                <div>
+                  <div>
+                    <dt>Discount</dt>
+                    <dd>{appliedCoupon.discountPercent}%</dd>
+                  </div>
+                  <div>
+                    <dt>Payable</dt>
+                    <dd>
+                      {naira(
+                        Math.round(
+                          (price.priceNgn *
+                            (100 - appliedCoupon.discountPercent)) /
+                            100,
+                        ),
+                      )}
+                    </dd>
+                  </div>
+                </div>
+              )}
+              <div className="field compact-field">
+                <label className="field-label">Coupon</label>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <input
+                    type="text"
+                    value={couponInput}
+                    onChange={(e) => setCouponInput(e.target.value)}
+                    placeholder="Enter coupon code"
+                  />
+                  <button type="button" className="ghost" onClick={applyCoupon}>
+                    Apply
+                  </button>
+                </div>
+                {couponMessage && <p className="help">{couponMessage}</p>}
               </div>
             </dl>
             {formError && (
@@ -573,6 +652,15 @@ function AdminDashboard({ token, onTokenChange }) {
   const [isBannerEditing, setIsBannerEditing] = useState(false);
   const [bannerInput, setBannerInput] = useState("");
   const [bannerSaving, setBannerSaving] = useState(false);
+  const [coupons, setCoupons] = useState([]);
+  const [couponsLoading, setCouponsLoading] = useState(false);
+  const [couponForm, setCouponForm] = useState({
+    code: "",
+    discountPercent: 10,
+    maxRedemptions: 1,
+    expiresAt: "",
+  });
+  const [couponError, setCouponError] = useState("");
 
   const loadApplications = async () => {
     if (!token) return;
@@ -631,8 +719,57 @@ function AdminDashboard({ token, onTokenChange }) {
     loadApplications();
     loadAdminInfo();
     loadBanner();
+    loadCoupons();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, statusFilter]);
+
+  const loadCoupons = async () => {
+    if (!token) return;
+    setCouponsLoading(true);
+    try {
+      const res = await fetch(`${API}/api/admin/coupons`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not load coupons.");
+      setCoupons(data.coupons || []);
+    } catch (err) {
+      setCouponError(err.message || "Could not load coupons.");
+    } finally {
+      setCouponsLoading(false);
+    }
+  };
+
+  const createCoupon = async () => {
+    setCouponError("");
+    try {
+      const body = {
+        code: couponForm.code || undefined,
+        discountPercent: Number(couponForm.discountPercent) || 0,
+        maxRedemptions: Number(couponForm.maxRedemptions) || 1,
+        expiresAt: couponForm.expiresAt || undefined,
+      };
+      const res = await fetch(`${API}/api/admin/coupons`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not create coupon");
+      setCouponForm({
+        code: "",
+        discountPercent: 10,
+        maxRedemptions: 1,
+        expiresAt: "",
+      });
+      await loadCoupons();
+    } catch (err) {
+      setCouponError(err.message || "Coupon creation failed");
+    }
+  };
 
   const handleSaveBanner = async () => {
     if (!bannerInput.trim()) return;
@@ -781,6 +918,86 @@ function AdminDashboard({ token, onTokenChange }) {
         <button type="button" className="ghost" onClick={logout}>
           Log out
         </button>
+      </div>
+
+      <div className="panel coupons-panel">
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <h2>Coupons</h2>
+          <div style={{ fontSize: "0.9rem", color: "var(--ink-soft)" }}>
+            {couponsLoading ? "Loading…" : `${coupons.length} coupons`}
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "1rem",
+            marginTop: "1rem",
+            alignItems: "center",
+          }}
+        >
+          <input
+            placeholder="Code (optional)"
+            value={couponForm.code}
+            onChange={(e) =>
+              setCouponForm((f) => ({ ...f, code: e.target.value }))
+            }
+          />
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={couponForm.discountPercent}
+            onChange={(e) =>
+              setCouponForm((f) => ({ ...f, discountPercent: e.target.value }))
+            }
+            style={{ width: "120px" }}
+          />
+          <input
+            type="number"
+            min={1}
+            value={couponForm.maxRedemptions}
+            onChange={(e) =>
+              setCouponForm((f) => ({ ...f, maxRedemptions: e.target.value }))
+            }
+            style={{ width: "140px" }}
+          />
+          <input
+            type="date"
+            value={couponForm.expiresAt}
+            onChange={(e) =>
+              setCouponForm((f) => ({ ...f, expiresAt: e.target.value }))
+            }
+          />
+          <button className="submit" type="button" onClick={createCoupon}>
+            Create coupon
+          </button>
+        </div>
+        {couponError && <p className="notice notice-error">{couponError}</p>}
+
+        <div style={{ marginTop: "1rem" }}>
+          {coupons.map((c) => (
+            <div
+              key={c.code}
+              style={{
+                padding: "8px 0",
+                borderBottom: "1px solid var(--line)",
+              }}
+            >
+              <strong>{c.code}</strong> — {c.discount_percent}% off ·{" "}
+              {c.redeemed}/{c.max_redemptions} redeemed{" "}
+              {c.expires_at
+                ? `· expires ${new Date(c.expires_at).toLocaleDateString()}`
+                : null}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="panel banner-settings-panel">

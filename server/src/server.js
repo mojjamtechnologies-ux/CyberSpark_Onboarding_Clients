@@ -280,6 +280,94 @@ app.get("/api/admin/me", requireAdmin, async (req, res) => {
   return res.json({ admin: req.admin });
 });
 
+// Helper: generate short coupon codes
+function generateCouponCode(len = 8) {
+  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let out = "";
+  const bytes = crypto.randomBytes(len);
+  for (let i = 0; i < len; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+// Public: validate a coupon code
+app.get("/api/coupons/validate", async (req, res) => {
+  if (!ensureSupabase(res)) return;
+  const codeRaw = String(req.query.code || "").trim();
+  if (!codeRaw) return res.status(400).json({ error: "Missing code." });
+  const code = codeRaw.toUpperCase();
+  const { data: c, error } = await supabase
+    .from("coupons")
+    .select(
+      "code, discount_percent, max_redemptions, redeemed, expires_at, active",
+    )
+    .eq("code", code)
+    .maybeSingle();
+  if (error) {
+    console.error("coupon lookup failed:", error.message);
+    return res.status(500).json({ error: "Could not validate coupon." });
+  }
+  if (!c || !c.active) return res.json({ valid: false });
+  if (c.expires_at && new Date(c.expires_at) <= new Date())
+    return res.json({ valid: false });
+  if (c.redeemed >= (c.max_redemptions || 0)) return res.json({ valid: false });
+  return res.json({
+    valid: true,
+    discountPercent: c.discount_percent,
+    code: c.code,
+  });
+});
+
+// Admin: create a coupon
+app.post("/api/admin/coupons", requireAdmin, async (req, res) => {
+  if (!ensureSupabase(res)) return;
+  const body = req.body || {};
+  const discount = Number(body.discountPercent || 0);
+  const maxRedemptions = Number(body.maxRedemptions || 1);
+  const expiresAt = body.expiresAt
+    ? new Date(body.expiresAt).toISOString()
+    : null;
+  if (!discount || discount <= 0 || discount > 100) {
+    return res
+      .status(400)
+      .json({ error: "discountPercent must be between 1 and 100." });
+  }
+  const code = String(body.code || generateCouponCode())
+    .trim()
+    .toUpperCase();
+  const insert = {
+    code,
+    discount_percent: Math.round(discount),
+    max_redemptions: maxRedemptions || 1,
+    expires_at: expiresAt,
+    active: body.active === false ? false : true,
+    created_by: req.admin?.id || null,
+  };
+  const { data, error } = await supabase
+    .from("coupons")
+    .insert(insert)
+    .select()
+    .single();
+  if (error) {
+    console.error("coupon create failed:", error.message);
+    return res.status(500).json({ error: "Could not create coupon." });
+  }
+  return res.json({ coupon: data });
+});
+
+// Admin: list coupons
+app.get("/api/admin/coupons", requireAdmin, async (_req, res) => {
+  if (!ensureSupabase(res)) return;
+  const { data, error } = await supabase
+    .from("coupons")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) {
+    console.error("coupon list failed:", error.message);
+    return res.status(500).json({ error: "Could not load coupons." });
+  }
+  return res.json({ coupons: data });
+});
+
 app.get("/api/admin/applications", requireAdmin, async (req, res) => {
   if (!ensureSupabase(res)) return;
   const statusFilter = String(req.query.status || "")
@@ -389,7 +477,7 @@ app.get("/api/services", async (_req, res) => {
   const { data, error } = await supabase
     .from("services")
     .select(
-      "id, name, description, sort_order, service_prices(level, price_ngn)",
+      "id, name, description, sort_order, service_prices(level, price_ngn, duration_minutes)",
     )
     .eq("active", true)
     .order("sort_order");
@@ -404,7 +492,10 @@ app.get("/api/services", async (_req, res) => {
     name: s.name,
     description: s.description,
     prices: Object.fromEntries(
-      s.service_prices.map((p) => [p.level, p.price_ngn]),
+      s.service_prices.map((p) => [
+        p.level,
+        { priceNgn: p.price_ngn, durationMinutes: p.duration_minutes },
+      ]),
     ),
   }));
   res.json({ services });
@@ -439,7 +530,7 @@ app.post(
 
     const { data: priceRow, error: priceErr } = await supabase
       .from("service_prices")
-      .select("price_ngn, services!inner(id, active)")
+      .select("price_ngn, duration_minutes, services!inner(id, active)")
       .eq("service_id", values.serviceId)
       .eq("level", values.level)
       .eq("services.active", true)
@@ -474,7 +565,43 @@ app.post(
       });
     }
 
+    // handle optional coupon code: validate and compute discounted price
     let application = null;
+    let finalPrice = priceRow.price_ngn;
+    let usedCoupon = null;
+    try {
+      const codeRaw = String(values.couponCode || "").trim();
+      if (codeRaw) {
+        const code = codeRaw.toUpperCase();
+        const { data: c, error: cErr } = await supabase
+          .from("coupons")
+          .select(
+            "code, discount_percent, max_redemptions, redeemed, expires_at, active",
+          )
+          .eq("code", code)
+          .maybeSingle();
+        if (cErr) {
+          console.error("coupon lookup failed:", cErr.message);
+        } else if (!c || !c.active) {
+          return res
+            .status(400)
+            .json({ error: "Invalid or inactive coupon code." });
+        } else if (c.expires_at && new Date(c.expires_at) <= new Date()) {
+          return res.status(400).json({ error: "Coupon code has expired." });
+        } else if (c.redeemed >= (c.max_redemptions || 0)) {
+          return res
+            .status(400)
+            .json({ error: "Coupon code has been fully redeemed." });
+        } else {
+          usedCoupon = c;
+          finalPrice = Math.round(
+            (finalPrice * (100 - Number(c.discount_percent))) / 100,
+          );
+        }
+      }
+    } catch (err) {
+      console.error("coupon validation error:", err?.message || err);
+    }
     for (let attempt = 0; attempt < 5 && !application; attempt++) {
       const { data, error } = await supabase
         .from("applications")
@@ -482,7 +609,9 @@ app.post(
           reference: makeReference(),
           service_id: values.serviceId,
           level: values.level,
-          price_ngn: priceRow.price_ngn,
+          price_ngn: finalPrice,
+          duration_minutes: priceRow.duration_minutes,
+          coupon_code: values.couponCode || null,
           full_name: values.fullName,
           email: values.email,
           phone: values.phone,
@@ -505,6 +634,18 @@ app.post(
       return res
         .status(500)
         .json({ error: "Could not save your application. Please try again." });
+    }
+
+    // if a coupon was used, increment redeemed count (best-effort)
+    if (usedCoupon) {
+      try {
+        await supabase
+          .from("coupons")
+          .update({ redeemed: (usedCoupon.redeemed || 0) + 1 })
+          .eq("code", usedCoupon.code);
+      } catch (err) {
+        console.error("coupon increment failed:", err?.message || err);
+      }
     }
 
     return res.status(201).json({

@@ -3,3 +3,4 @@ node_modules
 *.log
 *.txt
 DEPLOYMENT.md
+FEATURES_COMPLETED.md

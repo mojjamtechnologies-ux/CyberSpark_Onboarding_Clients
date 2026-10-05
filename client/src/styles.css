@@ -654,9 +654,81 @@ input[type="file"] {
   padding: 22px 14px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  * {
-    scroll-behavior: auto !important;
-    transition: none !important;
-  }
+/* Banner styles */
+.banner-container {
+  width: 100%;
+  overflow: hidden;
+  background: var(--paper);
+  margin-bottom: 2rem;
+}
+
+.banner-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 300px;
+  object-fit: cover;
+}
+
+/* Admin dashboard styles */
+.admin-user-info {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+.banner-settings-panel {
+  margin-bottom: 2rem;
+}
+
+.banner-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.banner-header-row h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.banner-preview-container {
+  margin-bottom: 1.5rem;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+.banner-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+  object-fit: cover;
+}
+
+.banner-edit-form {
+  padding: 1.5rem;
+  background: var(--paper);
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+.banner-edit-form small {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.button-group {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.button-group button {
+  flex: 1;
 }

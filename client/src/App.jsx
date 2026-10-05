@@ -104,6 +104,7 @@ export default function App() {
 function ClientOnboarding() {
   const [services, setServices] = useState([]);
   const [pay, setPay] = useState(null);
+  const [bannerUrl, setBannerUrl] = useState("");
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -119,17 +120,21 @@ function ClientOnboarding() {
     let cancelled = false;
     (async () => {
       try {
-        const [s, p] = await Promise.all([
+        const [s, p, b] = await Promise.all([
           fetch(`${API}/api/services`).then((r) =>
             r.ok ? r.json() : Promise.reject(),
           ),
           fetch(`${API}/api/payment-info`).then((r) =>
             r.ok ? r.json() : Promise.reject(),
           ),
+          fetch(`${API}/api/banner`).then((r) =>
+            r.ok ? r.json() : Promise.reject(),
+          ),
         ]);
         if (!cancelled) {
           setServices(s.services);
           setPay(p);
+          setBannerUrl(b.bannerUrl);
         }
       } catch {
         if (!cancelled)
@@ -257,6 +262,11 @@ function ClientOnboarding() {
 
   return (
     <div className="shell">
+      {bannerUrl && (
+        <div className="banner-container">
+          <img src={bannerUrl} alt="Banner" className="banner-image" />
+        </div>
+      )}
       <header className="masthead">
         <p className="brand">Onboarding Session</p>
         <h1>Enrol for a tech training</h1>
@@ -558,15 +568,22 @@ function AdminDashboard({ token, onTokenChange }) {
     rejected: 0,
   });
   const [actionBusyId, setActionBusyId] = useState("");
+  const [adminUser, setAdminUser] = useState(null);
+  const [bannerUrl, setBannerUrl] = useState("");
+  const [isBannerEditing, setIsBannerEditing] = useState(false);
+  const [bannerInput, setBannerInput] = useState("");
+  const [bannerSaving, setBannerSaving] = useState(false);
 
   const loadApplications = async () => {
     if (!token) return;
     setLoading(true);
     try {
-      const query = statusFilter === "all" ? "" : `?status=${statusFilter}`;
-      const res = await fetch(`${API}/api/admin/applications${query}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(
+        `${API}/api/admin/applications${statusFilter === "all" ? "" : `?status=${statusFilter}`}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || "Unable to load applications.");
@@ -582,12 +599,69 @@ function AdminDashboard({ token, onTokenChange }) {
     }
   };
 
+  const loadAdminInfo = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API}/api/admin/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.admin) {
+        setAdminUser(data.admin);
+      }
+    } catch {
+      // Silent fail, not critical
+    }
+  };
+
+  const loadBanner = async () => {
+    try {
+      const res = await fetch(`${API}/api/banner`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.bannerUrl) {
+        setBannerUrl(data.bannerUrl);
+        setBannerInput(data.bannerUrl);
+      }
+    } catch {
+      // Silent fail
+    }
+  };
+
   useEffect(() => {
     loadApplications();
+    loadAdminInfo();
+    loadBanner();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, statusFilter]);
 
-  async function handleLogin(e) {
+  const handleSaveBanner = async () => {
+    if (!bannerInput.trim()) return;
+    setBannerSaving(true);
+    try {
+      const res = await fetch(`${API}/api/admin/banner`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ bannerUrl: bannerInput.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLoginError(data.error || "Could not update banner.");
+        return;
+      }
+      setBannerUrl(data.bannerUrl);
+      setIsBannerEditing(false);
+      setLoginError("");
+    } catch (error) {
+      setLoginError(error.message || "Could not update banner.");
+    } finally {
+      setBannerSaving(false);
+    }
+  };
+
+  const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError("");
     setIsSubmitting(true);
@@ -608,7 +682,7 @@ function AdminDashboard({ token, onTokenChange }) {
     } finally {
       setIsSubmitting(false);
     }
-  }
+  };
 
   const logout = () => {
     onTokenChange("");
@@ -617,6 +691,7 @@ function AdminDashboard({ token, onTokenChange }) {
     if (supabaseClient) supabaseClient.auth.signOut().catch(() => {});
     setApplications([]);
     setSummary({ total: 0, pending: 0, confirmed: 0, rejected: 0 });
+    setAdminUser(null);
     setLoginError("");
   };
 
@@ -697,10 +772,70 @@ function AdminDashboard({ token, onTokenChange }) {
         <div>
           <p className="brand">Admin dashboard</p>
           <h1>Applications</h1>
+          {adminUser && (
+            <p className="admin-user-info">
+              Logged in as: <strong>{adminUser.email}</strong>
+            </p>
+          )}
         </div>
         <button type="button" className="ghost" onClick={logout}>
           Log out
         </button>
+      </div>
+
+      <div className="panel banner-settings-panel">
+        <div className="banner-header-row">
+          <h2>Banner settings</h2>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setIsBannerEditing(!isBannerEditing)}
+          >
+            {isBannerEditing ? "Cancel" : "Edit banner"}
+          </button>
+        </div>
+
+        {bannerUrl && (
+          <div className="banner-preview-container">
+            <img
+              src={bannerUrl}
+              alt="Current banner"
+              className="banner-preview"
+            />
+          </div>
+        )}
+
+        {isBannerEditing && (
+          <div className="banner-edit-form">
+            <label className="field">
+              <span className="field-label">Banner image URL</span>
+              <input
+                type="url"
+                value={bannerInput}
+                onChange={(e) => setBannerInput(e.target.value)}
+                placeholder="https://example.com/banner.jpg"
+              />
+              <small>Use a landscape image (1200x300px recommended)</small>
+            </label>
+            <div className="button-group">
+              <button
+                type="button"
+                className="submit"
+                disabled={bannerSaving || !bannerInput.trim()}
+                onClick={handleSaveBanner}
+              >
+                {bannerSaving ? "Saving…" : "Save banner"}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setIsBannerEditing(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <section className="stats-grid" aria-label="Application summary">

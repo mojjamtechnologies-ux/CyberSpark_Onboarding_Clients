@@ -129,3 +129,17 @@ create table if not exists admins (
 
 -- Example insert (run in SQL editor and replace with a real email):
 -- insert into admins (email) values ('admin@example.com') on conflict do nothing;
+
+-- ---------- Settings table (for global app config like banner) ----------
+create table if not exists settings (
+  key   text primary key,
+  value text,
+  updated_at timestamptz not null default now()
+);
+
+alter table settings enable row level security;
+
+-- Insert default banner URL (can be updated by admins)
+insert into settings (key, value) values
+  ('banner_image_url', 'https://images.unsplash.com/photo-1552664730-d307ca884978?w=1200&h=300&fit=crop')
+on conflict (key) do nothing;

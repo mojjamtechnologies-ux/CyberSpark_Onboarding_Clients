@@ -186,6 +186,12 @@ app.post("/api/admin/login", (req, res) => {
 });
 
 async function requireAdmin(req, res, next) {
+  if (!supabase) {
+    return res
+      .status(500)
+      .json({ error: "Supabase is not configured on the server." });
+  }
+
   const auth = req.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
 
@@ -223,7 +229,59 @@ async function requireAdmin(req, res, next) {
   }
 }
 
+// Get banner image URL (public endpoint)
+app.get("/api/banner", async (_req, res) => {
+  if (!ensureSupabase(res)) return;
+  const { data, error } = await supabase
+    .from("settings")
+    .select("value")
+    .eq("key", "banner_image_url")
+    .single();
+
+  if (error) {
+    console.error("banner fetch failed:", error.message);
+    return res.json({
+      bannerUrl:
+        "https://images.unsplash.com/photo-1552664730-d307ca884978?w=1200&h=300&fit=crop",
+    });
+  }
+
+  return res.json({ bannerUrl: data?.value || "" });
+});
+
+// Update banner image URL (admin only)
+app.patch("/api/admin/banner", requireAdmin, async (req, res) => {
+  if (!ensureSupabase(res)) return;
+  const url = String(req.body?.bannerUrl || "").trim();
+
+  if (!url || url.length > 500) {
+    return res.status(400).json({ error: "Invalid banner URL." });
+  }
+
+  const { error: updateErr } = await supabase
+    .from("settings")
+    .update({ value: url, updated_at: new Date().toISOString() })
+    .eq("key", "banner_image_url");
+
+  if (updateErr) {
+    console.error("banner update failed:", updateErr.message);
+    return res.status(500).json({ error: "Could not update banner." });
+  }
+
+  return res.json({ bannerUrl: url });
+});
+
+// Get current admin info (authenticated endpoint)
+app.get("/api/admin/me", requireAdmin, async (req, res) => {
+  if (!req.admin) {
+    return res.status(401).json({ error: "Unauthorized." });
+  }
+
+  return res.json({ admin: req.admin });
+});
+
 app.get("/api/admin/applications", requireAdmin, async (req, res) => {
+  if (!ensureSupabase(res)) return;
   const statusFilter = String(req.query.status || "")
     .trim()
     .toLowerCase();

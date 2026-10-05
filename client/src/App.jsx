@@ -258,8 +258,8 @@ function ClientOnboarding() {
   return (
     <div className="shell">
       <header className="masthead">
-        {/* <p className="brand">CyberSpark IT Solutions</p> */}
-        <h1>Enrol in a service or training</h1>
+        <p className="brand">Onboarding Session</p>
+        <h1>Enrol for a tech training</h1>
         <p className="lede">
           Pick a service and level, pay by bank transfer, then upload your
           receipt. We confirm by email.

@@ -493,7 +493,10 @@ app.get("/api/services", async (_req, res) => {
       name: s.name,
       description: s.description,
       prices: Object.fromEntries(
-        (s.service_prices || []).map((p) => [p.level, { priceNgn: p.price_ngn, durationMinutes: p.duration_minutes }]),
+        (s.service_prices || []).map((p) => [
+          p.level,
+          { priceNgn: p.price_ngn, durationMinutes: p.duration_minutes },
+        ]),
       ),
     }));
     return res.json({ services });
@@ -501,6 +504,7 @@ app.get("/api/services", async (_req, res) => {
     console.error("/api/services handler error:", err?.message || err);
     return res.status(500).json({ error: "Could not load services." });
   }
+});
 
 // Bank instructions (kept in server env so they are changed in one place)
 app.get("/api/payment-info", (_req, res) => {

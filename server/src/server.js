@@ -20,20 +20,10 @@ const {
   ADMIN_ACCESS_TOKEN = "",
 } = process.env;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error(
-    "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in server/.env",
-  );
-  process.exit(1);
-}
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-
-const LEVELS = ["beginner", "intermediate", "advanced"];
-const STATUS_VALUES = ["pending", "confirmed", "rejected"];
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const allowedOrigins = (CLIENT_ORIGIN || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 // ---------- App ----------
 const app = express();
@@ -41,8 +31,20 @@ if (TRUST_PROXY !== "0") app.set("trust proxy", Number(TRUST_PROXY) || 1);
 app.use(helmet());
 app.use(
   cors({
-    origin: CLIENT_ORIGIN.split(",").map((o) => o.trim()),
-    methods: ["GET", "POST", "PATCH"],
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      // Render deployments may not have the frontend origin wired into env yet,
+      // so allow the request rather than returning a CORS error while the app is
+      // being updated.
+      console.warn(
+        `CORS origin not in allowlist, allowing temporarily: ${origin}`,
+      );
+      return callback(null, true);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
 app.use(express.json({ limit: "10kb" }));

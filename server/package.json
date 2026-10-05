@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch --env-file=.env src/server.js",
     "start": "node src/server.js",
-    "build": "cd ../client && npm ci && npm run build"
+    "build": "npm ci && cd ../client && npm ci && npm run build"
   },
   "engines": {
     "node": ">=20.6"

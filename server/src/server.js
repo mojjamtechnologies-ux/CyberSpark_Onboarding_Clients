@@ -473,15 +473,44 @@ app.patch(
 );
 
 // Services with their prices for each level
+function getDurationMonthsValue(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return num;
+}
+
 app.get("/api/services", async (_req, res) => {
+  if (!ensureSupabase(res)) return;
+
   try {
-    const { data, error } = await supabase
+    let data;
+    let error;
+
+    const baseQuery = supabase
       .from("services")
       .select(
-        "id, name, description, sort_order, service_prices(level, price_ngn, duration_minutes)",
+        "id, name, description, sort_order, service_prices(level, price_ngn, duration_months, duration_minutes)",
       )
       .eq("active", true)
       .order("sort_order");
+
+    ({ data, error } = await baseQuery);
+
+    if (
+      error &&
+      /duration_months|duration_minutes|does not exist|column/.test(
+        error.message || "",
+      )
+    ) {
+      ({ data, error } = await supabase
+        .from("services")
+        .select(
+          "id, name, description, sort_order, service_prices(level, price_ngn)",
+        )
+        .eq("active", true)
+        .order("sort_order"));
+    }
 
     if (error) {
       console.error("services query failed:", error.message);
@@ -495,7 +524,12 @@ app.get("/api/services", async (_req, res) => {
       prices: Object.fromEntries(
         (s.service_prices || []).map((p) => [
           p.level,
-          { priceNgn: p.price_ngn, durationMinutes: p.duration_minutes },
+          {
+            priceNgn: Number(p.price_ngn ?? 0),
+            durationMonths: getDurationMonthsValue(
+              p.duration_months ?? p.duration_minutes ?? 0,
+            ),
+          },
         ]),
       ),
     }));
@@ -533,27 +567,51 @@ app.post(
     if (Object.keys(errors).length)
       return res.status(400).json(fieldError(errors));
 
-    const { data: priceRow, error: priceErr } = await supabase
+    let priceRow;
+    let priceLookupError;
+    const priceSelect =
+      "price_ngn, duration_months, duration_minutes, services!inner(id, active)";
+    let priceQuery = supabase
       .from("service_prices")
-      .select("price_ngn, duration_minutes, services!inner(id, active)")
+      .select(priceSelect)
       .eq("service_id", values.serviceId)
       .eq("level", values.level)
       .eq("services.active", true)
       .maybeSingle();
 
-    if (priceErr) {
-      console.error("price lookup failed:", priceErr.message);
+    let result = await priceQuery;
+    if (result.error) {
+      priceLookupError = result.error;
+      if (
+        /duration_months|duration_minutes|does not exist|column/.test(
+          result.error.message || "",
+        )
+      ) {
+        result = await supabase
+          .from("service_prices")
+          .select("price_ngn, services!inner(id, active)")
+          .eq("service_id", values.serviceId)
+          .eq("level", values.level)
+          .eq("services.active", true)
+          .maybeSingle();
+      }
+    }
+
+    if (result.error) {
+      console.error("price lookup failed:", result.error.message);
       return res
         .status(500)
         .json({ error: "Something went wrong. Please try again." });
     }
-    if (!priceRow) {
+
+    if (!result.data) {
       return res
         .status(400)
         .json(
           fieldError({ serviceId: "That service and level is not available." }),
         );
     }
+    priceRow = result.data;
 
     const proofPath = `proofs/${crypto.randomUUID()}.${kind.ext}`;
     const { error: uploadErr } = await supabase.storage
@@ -570,9 +628,13 @@ app.post(
       });
     }
 
+    const durationMonths = getDurationMonthsValue(
+      priceRow.duration_months ?? priceRow.duration_minutes ?? 0,
+    );
+
     // handle optional coupon code: validate and compute discounted price
     let application = null;
-    let finalPrice = priceRow.price_ngn;
+    let finalPrice = Number(priceRow.price_ngn ?? 0);
     let usedCoupon = null;
     try {
       const codeRaw = String(values.couponCode || "").trim();
@@ -585,50 +647,82 @@ app.post(
           )
           .eq("code", code)
           .maybeSingle();
-        if (cErr) {
+
+        if (
+          cErr &&
+          !/does not exist|relation .* coupons|table .* coupons/.test(
+            cErr.message || "",
+          )
+        ) {
           console.error("coupon lookup failed:", cErr.message);
-        } else if (!c || !c.active) {
-          return res
-            .status(400)
-            .json({ error: "Invalid or inactive coupon code." });
-        } else if (c.expires_at && new Date(c.expires_at) <= new Date()) {
-          return res.status(400).json({ error: "Coupon code has expired." });
-        } else if (c.redeemed >= (c.max_redemptions || 0)) {
-          return res
-            .status(400)
-            .json({ error: "Coupon code has been fully redeemed." });
-        } else {
+        } else if (!cErr && c && c.active) {
+          if (c.expires_at && new Date(c.expires_at) <= new Date()) {
+            return res.status(400).json({ error: "Coupon code has expired." });
+          }
+          if (c.redeemed >= (c.max_redemptions || 0)) {
+            return res
+              .status(400)
+              .json({ error: "Coupon code has been fully redeemed." });
+          }
           usedCoupon = c;
           finalPrice = Math.round(
             (finalPrice * (100 - Number(c.discount_percent))) / 100,
           );
+        } else if (!cErr && c && !c.active) {
+          return res
+            .status(400)
+            .json({ error: "Invalid or inactive coupon code." });
         }
       }
     } catch (err) {
       console.error("coupon validation error:", err?.message || err);
     }
+
     for (let attempt = 0; attempt < 5 && !application; attempt++) {
+      const insertPayload = {
+        reference: makeReference(),
+        service_id: values.serviceId,
+        level: values.level,
+        price_ngn: finalPrice,
+        duration_months: durationMonths,
+        full_name: values.fullName,
+        email: values.email,
+        phone: values.phone,
+        payment_reference: values.paymentReference,
+        payment_proof_path: proofPath,
+        status: "pending",
+      };
+
       const { data, error } = await supabase
         .from("applications")
         .insert({
-          reference: makeReference(),
-          service_id: values.serviceId,
-          level: values.level,
-          price_ngn: finalPrice,
-          duration_minutes: priceRow.duration_minutes,
+          ...insertPayload,
           coupon_code: values.couponCode || null,
-          full_name: values.fullName,
-          email: values.email,
-          phone: values.phone,
-          payment_reference: values.paymentReference,
-          payment_proof_path: proofPath,
-          status: "pending",
         })
         .select("reference, status, price_ngn, created_at")
         .single();
 
       if (!error) application = data;
-      else if (error.code !== "23505") {
+      else if (
+        error.message &&
+        /duration_months|does not exist|column/.test(error.message)
+      ) {
+        const legacyInsert = await supabase
+          .from("applications")
+          .insert({
+            ...insertPayload,
+            duration_minutes: durationMonths,
+            coupon_code: values.couponCode || null,
+          })
+          .select("reference, status, price_ngn, created_at")
+          .single();
+
+        if (!legacyInsert.error) application = legacyInsert.data;
+        else {
+          console.error("insert failed:", legacyInsert.error.message);
+          break;
+        }
+      } else if (error.code !== "23505") {
         console.error("insert failed:", error.message);
         break;
       }

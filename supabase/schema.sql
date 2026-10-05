@@ -26,7 +26,8 @@ create table if not exists service_prices (
   service_id text        not null references services(id) on delete cascade,
   level      skill_level not null,
   price_ngn  integer     not null check (price_ngn >= 0),
-  duration_minutes integer not null default 0,
+  duration_months integer not null default 0,
+  duration_minutes integer,
   primary key (service_id, level)
 );
 
@@ -36,7 +37,8 @@ create table if not exists applications (
   service_id         text not null references services(id),
   level              skill_level not null,
   price_ngn          integer not null check (price_ngn >= 0),
-  duration_minutes   integer not null default 0,
+  duration_months    integer not null default 0,
+  duration_minutes   integer,
   full_name          text not null,
   email              text not null,
   phone              text not null,
@@ -162,3 +164,24 @@ create table if not exists coupons (
 alter table coupons enable row level security;
 
 -- Example: insert into coupons (code, discount_percent, max_redemptions) values ('WELCOME10', 10, 100);
+
+alter table service_prices
+  add column if not exists duration_months integer default 0;
+
+alter table applications
+  add column if not exists duration_months integer default 0;
+
+alter table service_prices
+  add column if not exists duration_minutes integer;
+
+alter table applications
+  add column if not exists duration_minutes integer;
+
+-- Backfill from legacy column names if they already exist.
+update service_prices
+set duration_months = coalesce(duration_months, duration_minutes, 0)
+where duration_months is null or duration_minutes is not null;
+
+update applications
+set duration_months = coalesce(duration_months, duration_minutes, 0)
+where duration_months is null or duration_minutes is not null;

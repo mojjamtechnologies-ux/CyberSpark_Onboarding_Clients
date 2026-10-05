@@ -119,30 +119,67 @@ function ClientOnboarding() {
   const [couponMessage, setCouponMessage] = useState("");
   const fileInput = useRef(null);
 
+  const normalizePriceEntry = (value) => {
+    if (typeof value === "number") {
+      return { priceNgn: Number(value), durationMonths: 0 };
+    }
+    if (value && typeof value === "object") {
+      return {
+        priceNgn: Number(value.priceNgn ?? value.price_ngn ?? 0),
+        durationMonths: Number(
+          value.durationMonths ??
+            value.duration_months ??
+            value.durationMinutes ??
+            value.duration_minutes ??
+            0,
+        ),
+      };
+    }
+    return { priceNgn: 0, durationMonths: 0 };
+  };
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [s, p, b] = await Promise.all([
-          fetch(`${API}/api/services`).then((r) =>
-            r.ok ? r.json() : Promise.reject(),
-          ),
-          fetch(`${API}/api/payment-info`).then((r) =>
-            r.ok ? r.json() : Promise.reject(),
-          ),
-          fetch(`${API}/api/banner`).then((r) =>
-            r.ok ? r.json() : Promise.reject(),
-          ),
+        const [serviceData, p, b] = await Promise.all([
+          fetch(`${API}/api/services`).then(async (r) => {
+            const json = await r.json().catch(() => ({}));
+            if (!r.ok)
+              throw new Error(json.error || "Could not load services.");
+            return json;
+          }),
+          fetch(`${API}/api/payment-info`).then(async (r) => {
+            const json = await r.json().catch(() => ({}));
+            if (!r.ok)
+              throw new Error(json.error || "Could not load payment info.");
+            return json;
+          }),
+          fetch(`${API}/api/banner`).then(async (r) => {
+            const json = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(json.error || "Could not load banner.");
+            return json;
+          }),
         ]);
         if (!cancelled) {
-          setServices(s.services);
+          const normalizedServices = (serviceData.services || []).map((s) => ({
+            ...s,
+            prices: Object.fromEntries(
+              Object.entries(s.prices || {}).map(([level, value]) => [
+                level,
+                normalizePriceEntry(value),
+              ]),
+            ),
+          }));
+          setServices(normalizedServices);
           setPay(p);
-          setBannerUrl(b.bannerUrl);
+          setBannerUrl(b.bannerUrl || "");
         }
-      } catch {
+      } catch (error) {
         if (!cancelled)
           setLoadError(
-            "We could not load the services. Check your connection and refresh the page.",
+            error?.message ||
+              "We could not load the services. Check your connection and refresh the page.",
           );
       } finally {
         if (!cancelled) setLoading(false);
@@ -157,7 +194,10 @@ function ClientOnboarding() {
     () => services.find((s) => s.id === form.serviceId),
     [services, form.serviceId],
   );
-  const price = service && form.level ? service.prices[form.level] : null;
+  const price =
+    service && form.level
+      ? normalizePriceEntry(service.prices[form.level])
+      : null;
 
   const set = (name) => (e) => {
     setForm((f) => ({ ...f, [name]: e.target.value }));
@@ -191,12 +231,11 @@ function ClientOnboarding() {
     setFile(f);
   }
 
-  const formatDuration = (mins) => {
-    const m = Number(mins || 0);
+  const formatDuration = (months) => {
+    const m = Number(months || 0);
     if (!m) return "";
-    if (m % 60 === 0) return `${m / 60} hours`;
-    if (m >= 60) return `${(m / 60).toFixed(1)} hours`;
-    return `${m} minutes`;
+    if (m === 1) return "1 month";
+    return `${m} months`;
   };
 
   const applyCoupon = async () => {
@@ -381,10 +420,10 @@ function ClientOnboarding() {
                 <p className="price-line" aria-live="polite">
                   {service.name}, {form.level}:{" "}
                   <strong>{naira(price.priceNgn)}</strong>
-                  {price.durationMinutes ? (
+                  {price.durationMonths ? (
                     <span className="muted">
                       {" "}
-                      &middot; {formatDuration(price.durationMinutes)}
+                      &middot; {formatDuration(price.durationMonths)}
                     </span>
                   ) : null}
                 </p>

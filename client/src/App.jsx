@@ -489,7 +489,7 @@ function ClientOnboarding() {
                     <dt>Amount</dt>
                     <dd>
                       {price != null ? (
-                        <strong>{naira(price)}</strong>
+                        <strong>{naira(price.priceNgn)}</strong>
                       ) : (
                         "Choose a service and level first"
                       )}
@@ -713,6 +713,13 @@ function AdminDashboard({ token, onTokenChange }) {
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          onTokenChange("");
+          setLoginError(
+            "Your admin session is no longer valid. Please sign in again.",
+          );
+          return;
+        }
         throw new Error(data.error || "Unable to load applications.");
       }
       setApplications(data.applications || []);
@@ -733,6 +740,13 @@ function AdminDashboard({ token, onTokenChange }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 401 || res.status === 403) {
+        onTokenChange("");
+        setLoginError(
+          "Your admin session is no longer valid. Please sign in again.",
+        );
+        return;
+      }
       if (res.ok && data.admin) {
         setAdminUser(data.admin);
       }
@@ -770,7 +784,19 @@ function AdminDashboard({ token, onTokenChange }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Could not load coupons.");
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          onTokenChange("");
+          setCouponError(
+            "Your admin session is no longer valid. Please sign in again.",
+          );
+          setLoginError(
+            "Your admin session is no longer valid. Please sign in again.",
+          );
+          return;
+        }
+        throw new Error(data.error || "Could not load coupons.");
+      }
       setCoupons(data.coupons || []);
     } catch (err) {
       setCouponError(err.message || "Could not load coupons.");
@@ -797,7 +823,16 @@ function AdminDashboard({ token, onTokenChange }) {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Could not create coupon");
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          onTokenChange("");
+          setLoginError(
+            "Your admin session is no longer valid. Please sign in again.",
+          );
+          return;
+        }
+        throw new Error(data.error || "Could not create coupon");
+      }
       setCouponForm({
         code: "",
         discountPercent: 10,
@@ -824,6 +859,13 @@ function AdminDashboard({ token, onTokenChange }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          onTokenChange("");
+          setLoginError(
+            "Your admin session is no longer valid. Please sign in again.",
+          );
+          return;
+        }
         setLoginError(data.error || "Could not update banner.");
         return;
       }

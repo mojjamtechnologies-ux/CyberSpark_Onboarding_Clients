@@ -690,6 +690,11 @@ function Success({ result, onReset }) {
   );
 }
 
+const sessionMessage = (res, data) =>
+  res.status === 403
+    ? data?.error || "This account does not have admin access."
+    : "Your admin session is no longer valid. Please sign in again.";
+
 function AdminDashboard({ token, onTokenChange }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -724,11 +729,33 @@ function AdminDashboard({ token, onTokenChange }) {
   const [couponError, setCouponError] = useState("");
   const [editingCouponCode, setEditingCouponCode] = useState(null);
 
+  // Always send a fresh Supabase access token. The token saved at sign-in
+  // expires (about 1 hour), which is what caused the "session is no longer valid" message.
+  const authedFetch = async (url, options = {}) => {
+    let accessToken = token;
+    if (supabaseClient) {
+      const { data } = await supabaseClient.auth.getSession(); // refreshes if expired
+      if (data?.session?.access_token) accessToken = data.session.access_token;
+    }
+    const send = (t) =>
+      fetch(url, {
+        ...options,
+        headers: { ...(options.headers || {}), Authorization: `Bearer ${t}` },
+      });
+    let res = await send(accessToken);
+    if (res.status === 401 && supabaseClient) {
+      const { data } = await supabaseClient.auth.refreshSession();
+      if (data?.session?.access_token)
+        res = await send(data.session.access_token);
+    }
+    return res;
+  };
+
   const loadApplications = async () => {
     if (!token) return;
     setLoading(true);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `${API}/api/admin/applications${statusFilter === "all" ? "" : `?status=${statusFilter}`}`,
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -738,9 +765,7 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setLoginError(
-            "Your admin session is no longer valid. Please sign in again.",
-          );
+          setLoginError(sessionMessage(res, data));
           return;
         }
         throw new Error(data.error || "Unable to load applications.");
@@ -759,15 +784,13 @@ function AdminDashboard({ token, onTokenChange }) {
   const loadAdminInfo = async () => {
     if (!token) return;
     try {
-      const res = await fetch(`${API}/api/admin/me`, {
+      const res = await authedFetch(`${API}/api/admin/me`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 401 || res.status === 403) {
         onTokenChange("");
-        setLoginError(
-          "Your admin session is no longer valid. Please sign in again.",
-        );
+        setLoginError(sessionMessage(res, data));
         return;
       }
       if (res.ok && data.admin) {
@@ -803,19 +826,15 @@ function AdminDashboard({ token, onTokenChange }) {
     if (!token) return;
     setCouponsLoading(true);
     try {
-      const res = await fetch(`${API}/api/admin/coupons`, {
+      const res = await authedFetch(`${API}/api/admin/coupons`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setCouponError(
-            "Your admin session is no longer valid. Please sign in again.",
-          );
-          setLoginError(
-            "Your admin session is no longer valid. Please sign in again.",
-          );
+          setCouponError(sessionMessage(res, data));
+          setLoginError(sessionMessage(res, data));
           return;
         }
         throw new Error(data.error || "Could not load coupons.");
@@ -849,7 +868,7 @@ function AdminDashboard({ token, onTokenChange }) {
         ? `${API}/api/admin/coupons/${encodeURIComponent(editingCouponCode)}`
         : `${API}/api/admin/coupons`;
 
-      const res = await fetch(endpoint, {
+      const res = await authedFetch(endpoint, {
         method,
         headers: {
           "Content-Type": "application/json",
@@ -861,9 +880,7 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setLoginError(
-            "Your admin session is no longer valid. Please sign in again.",
-          );
+          setLoginError(sessionMessage(res, data));
           return;
         }
         throw new Error(data.error || "Could not create coupon");
@@ -900,7 +917,7 @@ function AdminDashboard({ token, onTokenChange }) {
     if (!token) return;
     if (!confirm(`Delete coupon ${code}? This cannot be undone.`)) return;
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `${API}/api/admin/coupons/${encodeURIComponent(code)}`,
         {
           method: "DELETE",
@@ -930,7 +947,7 @@ function AdminDashboard({ token, onTokenChange }) {
     if (!bannerInput.trim()) return;
     setBannerSaving(true);
     try {
-      const res = await fetch(`${API}/api/admin/banner`, {
+      const res = await authedFetch(`${API}/api/admin/banner`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -942,9 +959,7 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setLoginError(
-            "Your admin session is no longer valid. Please sign in again.",
-          );
+          setLoginError(sessionMessage(res, data));
           return;
         }
         setLoginError(data.error || "Could not update banner.");
@@ -998,14 +1013,17 @@ function AdminDashboard({ token, onTokenChange }) {
     if (!token) return;
     setActionBusyId(appId);
     try {
-      const res = await fetch(`${API}/api/admin/applications/${appId}/status`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const res = await authedFetch(
+        `${API}/api/admin/applications/${appId}/status`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ status: nextStatus }),
         },
-        body: JSON.stringify({ status: nextStatus }),
-      });
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok)
         throw new Error(

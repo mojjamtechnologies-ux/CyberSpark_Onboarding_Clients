@@ -152,7 +152,9 @@ on conflict (key) do nothing;
 -- ---------- Coupons table (promo codes for discounts) ----------
 create table if not exists coupons (
   code text primary key,
-  discount_percent integer not null check (discount_percent >= 0 and discount_percent <= 100),
+  discount_type text not null default 'percentage' check (discount_type in ('percentage', 'fixed')),
+  discount_percent integer not null default 0 check (discount_percent >= 0 and discount_percent <= 100),
+  discount_amount integer not null default 0 check (discount_amount >= 0),
   max_redemptions integer not null default 1,
   redeemed integer not null default 0,
   expires_at timestamptz,
@@ -163,7 +165,8 @@ create table if not exists coupons (
 
 alter table coupons enable row level security;
 
--- Example: insert into coupons (code, discount_percent, max_redemptions) values ('WELCOME10', 10, 100);
+-- Example: insert into coupons (code, discount_type, discount_percent, discount_amount, max_redemptions) values ('WELCOME10', 'percentage', 10, 0, 100);
+-- Example: insert into coupons (code, discount_type, discount_percent, discount_amount, max_redemptions) values ('SAVE500', 'fixed', 0, 500, 100);
 
 alter table service_prices
   add column if not exists duration_months integer default 0;

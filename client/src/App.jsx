@@ -252,11 +252,20 @@ function ClientOnboarding() {
         setCouponMessage("Invalid or expired coupon.");
         return;
       }
+      const discountType = String(
+        data.discountType || "percentage",
+      ).toLowerCase();
       setAppliedCoupon({
         code: data.code,
-        discountPercent: data.discountPercent,
+        discountType,
+        discountPercent: Number(data.discountPercent || 0),
+        discountAmount: Number(data.discountAmount || 0),
       });
-      setCouponMessage(`Applied: ${data.discountPercent}% off`);
+      setCouponMessage(
+        discountType === "fixed"
+          ? `Applied: ₦${Number(data.discountAmount || 0).toLocaleString()} off`
+          : `Applied: ${data.discountPercent}% off`,
+      );
     } catch (err) {
       setCouponMessage("Could not validate coupon. Try again.");
     }
@@ -553,17 +562,28 @@ function ClientOnboarding() {
                 <div>
                   <div>
                     <dt>Discount</dt>
-                    <dd>{appliedCoupon.discountPercent}%</dd>
+                    <dd>
+                      {appliedCoupon.discountType === "fixed"
+                        ? `₦${Number(appliedCoupon.discountAmount || 0).toLocaleString()}`
+                        : `${appliedCoupon.discountPercent}%`}
+                    </dd>
                   </div>
                   <div>
                     <dt>Payable</dt>
                     <dd>
                       {naira(
-                        Math.round(
-                          (price.priceNgn *
-                            (100 - appliedCoupon.discountPercent)) /
-                            100,
-                        ),
+                        appliedCoupon.discountType === "fixed"
+                          ? Math.max(
+                              0,
+                              Math.round(
+                                price.priceNgn - appliedCoupon.discountAmount,
+                              ),
+                            )
+                          : Math.round(
+                              (price.priceNgn *
+                                (100 - appliedCoupon.discountPercent)) /
+                                100,
+                            ),
                       )}
                     </dd>
                   </div>
@@ -695,11 +715,14 @@ function AdminDashboard({ token, onTokenChange }) {
   const [couponsLoading, setCouponsLoading] = useState(false);
   const [couponForm, setCouponForm] = useState({
     code: "",
+    discountType: "percentage",
     discountPercent: 10,
+    discountAmount: 500,
     maxRedemptions: 1,
     expiresAt: "",
   });
   const [couponError, setCouponError] = useState("");
+  const [editingCouponCode, setEditingCouponCode] = useState(null);
 
   const loadApplications = async () => {
     if (!token) return;
@@ -808,14 +831,26 @@ function AdminDashboard({ token, onTokenChange }) {
   const createCoupon = async () => {
     setCouponError("");
     try {
+      const discountType = String(
+        couponForm.discountType || "percentage",
+      ).toLowerCase();
+      const discountPercent = Number(couponForm.discountPercent) || 0;
+      const discountAmount = Number(couponForm.discountAmount) || 0;
       const body = {
         code: couponForm.code || undefined,
-        discountPercent: Number(couponForm.discountPercent) || 0,
+        discountType,
+        discountPercent: discountType === "percentage" ? discountPercent : 0,
+        discountAmount: discountType === "fixed" ? discountAmount : 0,
         maxRedemptions: Number(couponForm.maxRedemptions) || 1,
         expiresAt: couponForm.expiresAt || undefined,
       };
-      const res = await fetch(`${API}/api/admin/coupons`, {
-        method: "POST",
+      const method = editingCouponCode ? "PATCH" : "POST";
+      const endpoint = editingCouponCode
+        ? `${API}/api/admin/coupons/${encodeURIComponent(editingCouponCode)}`
+        : `${API}/api/admin/coupons`;
+
+      const res = await fetch(endpoint, {
+        method,
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
@@ -835,13 +870,56 @@ function AdminDashboard({ token, onTokenChange }) {
       }
       setCouponForm({
         code: "",
+        discountType: "percentage",
         discountPercent: 10,
+        discountAmount: 500,
         maxRedemptions: 1,
         expiresAt: "",
       });
+      setEditingCouponCode(null);
       await loadCoupons();
     } catch (err) {
       setCouponError(err.message || "Coupon creation failed");
+    }
+  };
+
+  const editCoupon = (c) => {
+    setCouponForm({
+      code: c.code || "",
+      discountType: c.discount_type || "percentage",
+      discountPercent: c.discount_percent || 0,
+      discountAmount: c.discount_amount || 0,
+      maxRedemptions: c.max_redemptions || 1,
+      expiresAt: c.expires_at ? c.expires_at.split("T")[0] : "",
+    });
+    setEditingCouponCode(c.code);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const deleteCoupon = async (code) => {
+    if (!token) return;
+    if (!confirm(`Delete coupon ${code}? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`${API}/api/admin/coupons/${encodeURIComponent(code)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not delete coupon.");
+      if (editingCouponCode === code) {
+        setEditingCouponCode(null);
+        setCouponForm({
+          code: "",
+          discountType: "percentage",
+          discountPercent: 10,
+          discountAmount: 500,
+          maxRedemptions: 1,
+          expiresAt: "",
+        });
+      }
+      await loadCoupons();
+    } catch (err) {
+      setCouponError(err.message || "Could not delete coupon.");
     }
   };
 
@@ -1002,44 +1080,75 @@ function AdminDashboard({ token, onTokenChange }) {
       </div>
 
       <div className="panel coupons-panel">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
+        <div className="coupon-panel-header">
           <h2>Coupons</h2>
-          <div style={{ fontSize: "0.9rem", color: "var(--ink-soft)" }}>
-            {couponsLoading ? "Loading…" : `${coupons.length} coupons`}
+          <div className="coupon-list">
+            {coupons.map((c) => (
+              <div key={c.code} className="coupon-item">
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center" }}>
+                  <div>
+                    <strong>{c.code}</strong> — {" "}
+                    {c.discount_type === "fixed"
+                      ? `₦${Number(c.discount_amount || 0).toLocaleString()} off`
+                      : `${c.discount_percent}% off`} {" "}
+                    · {c.redeemed}/{c.max_redemptions} redeemed {" "}
+                    {c.expires_at ? `· expires ${new Date(c.expires_at).toLocaleDateString()}` : null}
+                  </div>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <button type="button" className="mini-action" onClick={() => editCoupon(c)}>
+                      Edit
+                    </button>
+                    <button type="button" className="mini-action" onClick={() => deleteCoupon(c.code)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
-        </div>
+          <select
+            value={couponForm.discountType}
+            onChange={(e) =>
+              setCouponForm((f) => ({
+                ...f,
+                discountType: e.target.value,
+              }))
+            }
+          >
+            <option value="percentage">% off</option>
+            <option value="fixed">Fixed amount</option>
+          </select>
 
-        <div
-          style={{
-            display: "flex",
-            gap: "1rem",
-            marginTop: "1rem",
-            alignItems: "center",
-          }}
-        >
-          <input
-            placeholder="Code (optional)"
-            value={couponForm.code}
-            onChange={(e) =>
-              setCouponForm((f) => ({ ...f, code: e.target.value }))
-            }
-          />
-          <input
-            type="number"
-            min={1}
-            max={100}
-            value={couponForm.discountPercent}
-            onChange={(e) =>
-              setCouponForm((f) => ({ ...f, discountPercent: e.target.value }))
-            }
-            style={{ width: "120px" }}
-          />
+          {couponForm.discountType === "percentage" ? (
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={couponForm.discountPercent}
+              onChange={(e) =>
+                setCouponForm((f) => ({
+                  ...f,
+                  discountPercent: e.target.value,
+                }))
+              }
+              aria-label="Coupon percentage discount"
+            />
+          ) : (
+            <input
+              type="number"
+              min={1}
+              step={100}
+              value={couponForm.discountAmount}
+              onChange={(e) =>
+                setCouponForm((f) => ({
+                  ...f,
+                  discountAmount: e.target.value,
+                }))
+              }
+              aria-label="Coupon fixed discount amount"
+            />
+          )}
+
           <input
             type="number"
             min={1}
@@ -1047,32 +1156,32 @@ function AdminDashboard({ token, onTokenChange }) {
             onChange={(e) =>
               setCouponForm((f) => ({ ...f, maxRedemptions: e.target.value }))
             }
-            style={{ width: "140px" }}
+            aria-label="Max coupon redemptions"
           />
+
           <input
             type="date"
             value={couponForm.expiresAt}
             onChange={(e) =>
               setCouponForm((f) => ({ ...f, expiresAt: e.target.value }))
             }
+            aria-label="Coupon expiry date"
           />
+
           <button className="submit" type="button" onClick={createCoupon}>
             Create coupon
           </button>
         </div>
         {couponError && <p className="notice notice-error">{couponError}</p>}
 
-        <div style={{ marginTop: "1rem" }}>
+        <div className="coupon-list">
           {coupons.map((c) => (
-            <div
-              key={c.code}
-              style={{
-                padding: "8px 0",
-                borderBottom: "1px solid var(--line)",
-              }}
-            >
-              <strong>{c.code}</strong> — {c.discount_percent}% off ·{" "}
-              {c.redeemed}/{c.max_redemptions} redeemed{" "}
+            <div key={c.code} className="coupon-item">
+              <strong>{c.code}</strong> —{" "}
+              {c.discount_type === "fixed"
+                ? `₦${Number(c.discount_amount || 0).toLocaleString()} off`
+                : `${c.discount_percent}% off`}{" "}
+              · {c.redeemed}/{c.max_redemptions} redeemed{" "}
               {c.expires_at
                 ? `· expires ${new Date(c.expires_at).toLocaleDateString()}`
                 : null}

@@ -375,16 +375,33 @@ app.post("/api/admin/coupons", requireAdmin, async (req, res) => {
 });
 
 // Admin: update a coupon
-app.patch("/api/admin/coupons/:id", requireAdmin, async (req, res) => {
+// Admin: list coupons
+app.get("/api/admin/coupons", requireAdmin, async (_req, res) => {
+  if (!ensureSupabase(res)) return;
+  const { data, error } = await supabase
+    .from("coupons")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) {
+    console.error("coupon list failed:", error.message);
+    return res.status(500).json({ error: "Could not load coupons." });
+  }
+  return res.json({ coupons: data || [] });
+});
+
+// Admin: update a coupon (the client addresses coupons by CODE)
+app.patch("/api/admin/coupons/:code", requireAdmin, async (req, res) => {
   if (!ensureSupabase(res)) return;
   const body = req.body || {};
-  const id = req.params.id;
+  const code = String(req.params.code || "")
+    .trim()
+    .toUpperCase();
 
   const { data: coupon, error: fetchErr } = await supabase
     .from("coupons")
     .select("*")
-    .eq("id", id)
-    .single();
+    .eq("code", code)
+    .maybeSingle();
   if (fetchErr) {
     console.error("coupon fetch failed:", fetchErr.message);
     return res.status(500).json({ error: "Could not fetch coupon." });
@@ -405,12 +422,14 @@ app.patch("/api/admin/coupons/:id", requireAdmin, async (req, res) => {
         .status(400)
         .json({ error: "discountAmount must be greater than 0." });
     }
-  } else {
-    if (!discountPercent || discountPercent <= 0 || discountPercent > 100) {
-      return res
-        .status(400)
-        .json({ error: "discountPercent must be between 1 and 100." });
-    }
+  } else if (
+    !discountPercent ||
+    discountPercent <= 0 ||
+    discountPercent > 100
+  ) {
+    return res
+      .status(400)
+      .json({ error: "discountPercent must be between 1 and 100." });
   }
 
   const update = {
@@ -426,14 +445,67 @@ app.patch("/api/admin/coupons/:id", requireAdmin, async (req, res) => {
   const { error: updateErr } = await supabase
     .from("coupons")
     .update(update)
-    .eq("id", id);
-
+    .eq("code", code);
   if (updateErr) {
     console.error("coupon update failed:", updateErr.message);
     return res.status(500).json({ error: "Could not update coupon." });
   }
-
   return res.json({ coupon: { ...coupon, ...update } });
+});
+
+// Admin: delete a coupon
+app.delete("/api/admin/coupons/:code", requireAdmin, async (req, res) => {
+  if (!ensureSupabase(res)) return;
+  const code = String(req.params.code || "")
+    .trim()
+    .toUpperCase();
+  const { data, error } = await supabase
+    .from("coupons")
+    .delete()
+    .eq("code", code)
+    .select()
+    .maybeSingle();
+  if (error) {
+    console.error("coupon delete failed:", error.message);
+    return res.status(500).json({ error: "Could not delete coupon." });
+  }
+  if (!data) return res.status(404).json({ error: "Coupon not found." });
+  return res.json({ coupon: data });
+});
+
+// Public: services with prices per level
+app.get("/api/services", async (_req, res) => {
+  if (!ensureSupabase(res)) return;
+  const { data, error } = await supabase
+    .from("services")
+    .select(
+      "id, name, description, sort_order, service_prices(level, price_ngn)",
+    )
+    .eq("active", true)
+    .order("sort_order");
+  if (error) {
+    console.error("services query failed:", error.message);
+    return res.status(500).json({ error: "Could not load services." });
+  }
+  const services = (data || []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    description: s.description,
+    prices: Object.fromEntries(
+      (s.service_prices || []).map((p) => [p.level, p.price_ngn]),
+    ),
+  }));
+  return res.json({ services });
+});
+
+// Public: bank instructions
+app.get("/api/payment-info", (_req, res) => {
+  res.json({
+    bankName: BANK_NAME,
+    accountName: BANK_ACCOUNT_NAME,
+    accountNumber: BANK_ACCOUNT_NUMBER,
+    note: PAYMENT_NOTE,
+  });
 });
 
 // Application: submit a new application
@@ -444,133 +516,255 @@ app.post(
   async (req, res) => {
     if (!ensureSupabase(res)) return;
     const body = req.body || {};
-    const file = req.file;
-    const ip = req.ip;
-
-    // Validate request data
     const { errors, values } = validate(body);
+
+    const file = req.file;
+    const kind = file ? sniffFile(file.buffer) : null;
+    if (!file) errors.proof = "Upload your payment proof.";
+    else if (!kind)
+      errors.proof = "Proof must be a JPG, PNG, WEBP or PDF file.";
     if (Object.keys(errors).length) {
       return res.status(400).json(fieldError(errors));
     }
 
-    // Check for duplicate application (same payment reference)
+    // Price always comes from the database
+    const { data: priceRow, error: priceErr } = await supabase
+      .from("service_prices")
+      .select("price_ngn, services!inner(id, active)")
+      .eq("service_id", values.serviceId)
+      .eq("level", values.level)
+      .eq("services.active", true)
+      .maybeSingle();
+    if (priceErr) {
+      console.error("price lookup failed:", priceErr.message);
+      return res
+        .status(500)
+        .json({ error: "Something went wrong. Please try again." });
+    }
+    if (!priceRow) {
+      return res
+        .status(400)
+        .json(
+          fieldError({ serviceId: "That service and level is not available." }),
+        );
+    }
+
+    // Duplicate payment reference
     const { data: dupes, error: dupesErr } = await supabase
       .from("applications")
       .select("id, status, created_at")
       .eq("payment_reference", values.paymentReference)
-      .order("created_at", { ascending: false })
-      .limit(2);
+      .limit(1);
     if (dupesErr) {
       console.error("duplicate check failed:", dupesErr.message);
       return res.status(500).json({ error: "Could not check for duplicates." });
     }
     if (dupes?.length) {
-      const latest = dupes[0];
-      return res.status(400).json({
-        error: "Duplicate application found.",
-        fields: ["paymentReference"],
-        message: `You already submitted an application with this payment reference on ${new Date(
-          latest.created_at,
-        ).toLocaleString()}.`,
-        status: latest.status,
-        id: latest.id,
-      });
+      return res.status(400).json(
+        fieldError({
+          paymentReference:
+            "An application with this payment reference already exists.",
+        }),
+      );
     }
 
-    // Handle file upload: store to Supabase Storage
-    let fileUrl = null;
-    if (file) {
-      const fileExt = file.originalname.split(".").pop().toLowerCase();
-      const fileName = `${makeReference()}.${fileExt}`;
-      const { error: uploadErr } = await supabase.storage
-        .from(SUPABASE_BUCKET)
-        .upload(fileName, file.buffer, {
-          contentType: file.mimetype,
-          upsert: false,
-        });
-      if (uploadErr) {
-        console.error("file upload failed:", uploadErr.message);
-        return res.status(500).json({ error: "Could not upload file." });
+    // Optional coupon (validated here, never trusted from the browser)
+    let finalPrice = Number(priceRow.price_ngn);
+    let coupon = null;
+    const couponCode = String(body.couponCode || "")
+      .trim()
+      .toUpperCase();
+    if (couponCode) {
+      const { data: c, error: cErr } = await supabase
+        .from("coupons")
+        .select(
+          "code, discount_type, discount_percent, discount_amount, max_redemptions, redeemed, expires_at, active",
+        )
+        .eq("code", couponCode)
+        .maybeSingle();
+      if (cErr) {
+        console.error("coupon lookup failed:", cErr.message);
+        return res.status(500).json({ error: "Could not validate coupon." });
       }
-      fileUrl = supabase.storage.from(SUPABASE_BUCKET).getPublicUrl(fileName)
-        .data.publicUrl;
-    }
-
-    // Create the application record
-    const application = {
-      ...values,
-      status: "pending",
-      ip_address: ip,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      proof_url: fileUrl,
-    };
-    const { data, error } = await supabase
-      .from("applications")
-      .insert(application)
-      .select()
-      .single();
-    if (error) {
-      console.error("application insert failed:", error.message);
-      return res.status(500).json({ error: "Could not submit application." });
-    }
-
-    // handle optional coupon code: validate and compute discounted price
-    let finalPrice = Number(priceRow.price_ngn ?? 0);
-    let usedCoupon = null;
-    try {
-      const codeRaw = String(values.couponCode || "").trim();
-      if (codeRaw) {
-        const code = codeRaw.toUpperCase();
-        const { data: c, error: cErr } = await supabase
-          .from("coupons")
-          .select(
-            "code, discount_type, discount_percent, discount_amount, max_redemptions, redeemed, expires_at, active",
-          )
-          .eq("code", code)
-          .maybeSingle();
-
-        if (
-          cErr &&
-          !/does not exist|relation .* coupons|table .* coupons/.test(
-            cErr.message || "",
-          )
-        ) {
-          console.error("coupon lookup failed:", cErr.message);
-        } else if (!cErr && c && c.active) {
-          if (c.expires_at && new Date(c.expires_at) <= new Date()) {
-            return res.status(400).json({ error: "Coupon code has expired." });
-          }
-          if (c.redeemed >= (c.max_redemptions || 0)) {
-            return res
-              .status(400)
-              .json({ error: "Coupon code has been fully redeemed." });
-          }
-          usedCoupon = c;
-          if (c.discount_type === "fixed") {
-            finalPrice = Math.max(
-              0,
-              Math.round(finalPrice - Number(c.discount_amount || 0)),
-            );
-          } else {
-            finalPrice = Math.round(
+      const usable =
+        c &&
+        c.active &&
+        !(c.expires_at && new Date(c.expires_at) <= new Date()) &&
+        c.redeemed < (c.max_redemptions || 0);
+      if (!usable)
+        return res.status(400).json({ error: "Invalid or expired coupon." });
+      coupon = c;
+      finalPrice =
+        c.discount_type === "fixed"
+          ? Math.max(0, Math.round(finalPrice - Number(c.discount_amount || 0)))
+          : Math.round(
               (finalPrice * (100 - Number(c.discount_percent || 0))) / 100,
             );
-          }
-        } else if (!cErr && c && !c.active) {
-          return res
-            .status(400)
-            .json({ error: "Invalid or inactive coupon code." });
-        }
-      }
-    } catch (err) {
-      console.error("coupon validation error:", err?.message || err);
     }
 
-    return res.json({
-      application: { ...data, finalPrice },
-      ...(usedCoupon ? { coupon: usedCoupon } : {}),
+    // Upload proof to the private bucket
+    const proofPath = `proofs/${crypto.randomUUID()}.${kind.ext}`;
+    const { error: uploadErr } = await supabase.storage
+      .from(SUPABASE_BUCKET)
+      .upload(proofPath, file.buffer, {
+        contentType: kind.mime,
+        upsert: false,
+      });
+    if (uploadErr) {
+      console.error("file upload failed:", uploadErr.message);
+      return res
+        .status(500)
+        .json({ error: "Could not upload your payment proof." });
+    }
+
+    // Insert, retrying on reference collisions
+    let application = null;
+    for (let attempt = 0; attempt < 5 && !application; attempt++) {
+      const { data, error } = await supabase
+        .from("applications")
+        .insert({
+          reference: makeReference(),
+          service_id: values.serviceId,
+          level: values.level,
+          price_ngn: Number(priceRow.price_ngn),
+          final_price_ngn: finalPrice,
+          coupon_code: coupon ? coupon.code : null,
+          full_name: values.fullName,
+          email: values.email,
+          phone: values.phone,
+          payment_reference: values.paymentReference,
+          payment_proof_path: proofPath,
+          status: "pending",
+        })
+        .select("reference, status, final_price_ngn, created_at")
+        .single();
+      if (!error) application = data;
+      else if (error.code !== "23505") {
+        console.error("application insert failed:", error.message);
+        break;
+      }
+    }
+    if (!application) {
+      await supabase.storage.from(SUPABASE_BUCKET).remove([proofPath]);
+      return res
+        .status(500)
+        .json({ error: "Could not save your application. Please try again." });
+    }
+
+    // Count the coupon use (optimistic lock so two people can't take the last use)
+    if (coupon) {
+      const { error: redeemErr } = await supabase
+        .from("coupons")
+        .update({ redeemed: coupon.redeemed + 1 })
+        .eq("code", coupon.code)
+        .eq("redeemed", coupon.redeemed);
+      if (redeemErr) console.error("coupon redeem failed:", redeemErr.message);
+    }
+
+    return res.status(201).json({
+      reference: application.reference,
+      status: application.status,
+      priceNgn: application.final_price_ngn,
+      createdAt: application.created_at,
     });
+  },
+);
+
+// Admin: list applications (+ counts), with signed links to the private proofs
+app.get("/api/admin/applications", requireAdmin, async (req, res) => {
+  if (!ensureSupabase(res)) return;
+  const status = String(req.query.status || "").toLowerCase();
+
+  let query = supabase
+    .from("applications")
+    .select("*, services(name)")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if (STATUS_VALUES.includes(status)) query = query.eq("status", status);
+
+  const { data, error } = await query;
+  if (error) {
+    console.error("admin applications failed:", error.message);
+    return res.status(500).json({ error: "Unable to load applications." });
+  }
+  const rows = data || [];
+
+  const paths = rows.map((r) => r.payment_proof_path).filter(Boolean);
+  const signed = {};
+  if (paths.length) {
+    const { data: urls, error: signErr } = await supabase.storage
+      .from(SUPABASE_BUCKET)
+      .createSignedUrls(paths, 60 * 60);
+    if (signErr) console.error("signing failed:", signErr.message);
+    (urls || []).forEach((u) => {
+      if (u.path && u.signedUrl) signed[u.path] = u.signedUrl;
+    });
+  }
+
+  const applications = rows.map((r) => ({
+    id: r.id,
+    reference: r.reference,
+    fullName: r.full_name,
+    email: r.email,
+    phone: r.phone,
+    serviceId: r.service_id,
+    serviceName: r.services?.name || r.service_id,
+    level: r.level,
+    priceNgn: r.final_price_ngn ?? r.price_ngn,
+    couponCode: r.coupon_code || null,
+    paymentReference: r.payment_reference,
+    proofUrl: signed[r.payment_proof_path] || r.proof_url || null,
+    status: r.status,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }));
+
+  // Counts across ALL applications, not just the filtered page
+  const count = async (s) => {
+    let q = supabase
+      .from("applications")
+      .select("id", { count: "exact", head: true });
+    if (s) q = q.eq("status", s);
+    const { count: n } = await q;
+    return n || 0;
+  };
+  const [total, pending, confirmed, rejected] = await Promise.all([
+    count(),
+    count("pending"),
+    count("confirmed"),
+    count("rejected"),
+  ]);
+
+  return res.json({
+    applications,
+    summary: { total, pending, confirmed, rejected },
+  });
+});
+
+// Admin: change an application's status
+app.patch(
+  "/api/admin/applications/:id/status",
+  requireAdmin,
+  async (req, res) => {
+    if (!ensureSupabase(res)) return;
+    const status = String(req.body?.status || "").toLowerCase();
+    if (!STATUS_VALUES.includes(status)) {
+      return res.status(400).json({ error: "Invalid status." });
+    }
+    const { data, error } = await supabase
+      .from("applications")
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq("id", req.params.id)
+      .select("id, status, updated_at")
+      .maybeSingle();
+    if (error) {
+      console.error("status update failed:", error.message);
+      return res
+        .status(500)
+        .json({ error: "Could not update the application status." });
+    }
+    if (!data) return res.status(404).json({ error: "Application not found." });
+    return res.json({ application: data });
   },
 );
 

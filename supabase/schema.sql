@@ -91,7 +91,7 @@ insert into services (id, name, description, sort_order) values
   ('digital-marketing', 'Digital Marketing',          'Grow a business with social, search and email marketing.',  10),
   ('desktop-publication', 'Desktop Publishing',        'Design and layout books, magazines and brochures.',         11),
   ('it-consulting',     'IT Consulting',              'Advise businesses on IT strategy and solutions.',           12),
-  ('programming',        'Programming & Scripting',    'Write scripts and programs to automate tasks.',             13)
+  ('programming',        'Programming & Scripting',    'Write scripts and programs to automate tasks.',             13),
 on conflict (id) do nothing;
 
 insert into service_prices (service_id, level, price_ngn)

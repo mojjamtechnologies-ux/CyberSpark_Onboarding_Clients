@@ -342,9 +342,11 @@ app.post("/api/admin/coupons", requireAdmin, async (req, res) => {
   const discountPercent = Number(body.discountPercent || 0);
   const discountAmount = Number(body.discountAmount || 0);
   const maxRedemptions = Number(body.maxRedemptions || 1);
-  const expiresAt = body.expiresAt
-    ? new Date(body.expiresAt).toISOString()
-    : null;
+  const expiresDate = body.expiresAt ? new Date(body.expiresAt) : null;
+  if (expiresDate && Number.isNaN(expiresDate.getTime())) {
+    return res.status(400).json({ error: "Expiry date is not valid." });
+  }
+  const expiresAt = expiresDate ? expiresDate.toISOString() : null;
 
   if (discountType === "fixed") {
     if (!discountAmount || discountAmount <= 0) {
@@ -380,8 +382,16 @@ app.post("/api/admin/coupons", requireAdmin, async (req, res) => {
     .select()
     .single();
   if (error) {
-    console.error("coupon insert failed:", error.message);
-    return res.status(500).json({ error: "Could not create coupon." });
+    console.error("coupon insert failed:", error.code, error.message, error.details || "");
+    if (error.code === "23505") {
+      return res
+        .status(409)
+        .json({ error: `Coupon code ${code} already exists. Use a different code.` });
+    }
+    // Admin-only route, so it is safe to show the database's reason
+    return res
+      .status(500)
+      .json({ error: `Could not create coupon: ${error.message}` });
   }
 
   return res.json({ coupon: data });
@@ -423,9 +433,11 @@ app.patch("/api/admin/coupons/:code", requireAdmin, async (req, res) => {
   const discountPercent = Number(body.discountPercent || 0);
   const discountAmount = Number(body.discountAmount || 0);
   const maxRedemptions = Number(body.maxRedemptions || 1);
-  const expiresAt = body.expiresAt
-    ? new Date(body.expiresAt).toISOString()
-    : null;
+  const expiresDate = body.expiresAt ? new Date(body.expiresAt) : null;
+  if (expiresDate && Number.isNaN(expiresDate.getTime())) {
+    return res.status(400).json({ error: "Expiry date is not valid." });
+  }
+  const expiresAt = expiresDate ? expiresDate.toISOString() : null;
 
   if (discountType === "fixed") {
     if (!discountAmount || discountAmount <= 0) {
@@ -453,8 +465,10 @@ app.patch("/api/admin/coupons/:code", requireAdmin, async (req, res) => {
     .update(update)
     .eq("code", code);
   if (updateErr) {
-    console.error("coupon update failed:", updateErr.message);
-    return res.status(500).json({ error: "Could not update coupon." });
+    console.error("coupon update failed:", updateErr.code, updateErr.message);
+    return res
+      .status(500)
+      .json({ error: `Could not update coupon: ${updateErr.message}` });
   }
   return res.json({ coupon: { ...coupon, ...update } });
 });

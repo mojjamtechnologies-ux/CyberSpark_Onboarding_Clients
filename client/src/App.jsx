@@ -900,10 +900,13 @@ function AdminDashboard({ token, onTokenChange }) {
     if (!token) return;
     if (!confirm(`Delete coupon ${code}? This cannot be undone.`)) return;
     try {
-      const res = await fetch(`${API}/api/admin/coupons/${encodeURIComponent(code)}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(
+        `${API}/api/admin/coupons/${encodeURIComponent(code)}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Could not delete coupon.");
       if (editingCouponCode === code) {
@@ -1085,20 +1088,37 @@ function AdminDashboard({ token, onTokenChange }) {
           <div className="coupon-list">
             {coupons.map((c) => (
               <div key={c.code} className="coupon-item">
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "0.75rem",
+                    alignItems: "center",
+                  }}
+                >
                   <div>
-                    <strong>{c.code}</strong> — {" "}
+                    <strong>{c.code}</strong> —{" "}
                     {c.discount_type === "fixed"
                       ? `₦${Number(c.discount_amount || 0).toLocaleString()} off`
-                      : `${c.discount_percent}% off`} {" "}
-                    · {c.redeemed}/{c.max_redemptions} redeemed {" "}
-                    {c.expires_at ? `· expires ${new Date(c.expires_at).toLocaleDateString()}` : null}
+                      : `${c.discount_percent}% off`}{" "}
+                    · {c.redeemed}/{c.max_redemptions} redeemed{" "}
+                    {c.expires_at
+                      ? `· expires ${new Date(c.expires_at).toLocaleDateString()}`
+                      : null}
                   </div>
                   <div style={{ display: "flex", gap: "0.5rem" }}>
-                    <button type="button" className="mini-action" onClick={() => editCoupon(c)}>
+                    <button
+                      type="button"
+                      className="mini-action"
+                      onClick={() => editCoupon(c)}
+                    >
                       Edit
                     </button>
-                    <button type="button" className="mini-action" onClick={() => deleteCoupon(c.code)}>
+                    <button
+                      type="button"
+                      className="mini-action"
+                      onClick={() => deleteCoupon(c.code)}
+                    >
                       Delete
                     </button>
                   </div>

@@ -690,6 +690,15 @@ function Success({ result, onReset }) {
   );
 }
 
+const emailSubject = (item) =>
+  `CyberSpark IT Solutions: your application ${item.reference}`;
+const emailBody = (item) => `Hello ${item.fullName},\n\n`;
+const mailtoLink = (item) =>
+  `mailto:${item.email}?subject=${encodeURIComponent(emailSubject(item))}&body=${encodeURIComponent(emailBody(item))}`;
+const gmailLink = (item) =>
+  `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(item.email)}&su=${encodeURIComponent(emailSubject(item))}&body=${encodeURIComponent(emailBody(item))}`;
+const telLink = (phone) => `tel:${String(phone || "").replace(/[^\d+]/g, "")}`;
+
 const sessionMessage = (res, data) =>
   res.status === 403
     ? data?.error || "This account does not have admin access."
@@ -745,8 +754,7 @@ function AdminDashboard({ token, onTokenChange }) {
     let res = await send(accessToken);
     if (res.status === 401 && supabaseClient) {
       const { data } = await supabaseClient.auth.refreshSession();
-      if (data?.session?.access_token)
-        res = await send(data.session.access_token);
+      if (data?.session?.access_token) res = await send(data.session.access_token);
     }
     return res;
   };
@@ -765,7 +773,9 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setLoginError(sessionMessage(res, data));
+          setLoginError(
+            sessionMessage(res, data),
+          );
           return;
         }
         throw new Error(data.error || "Unable to load applications.");
@@ -790,7 +800,9 @@ function AdminDashboard({ token, onTokenChange }) {
       const data = await res.json().catch(() => ({}));
       if (res.status === 401 || res.status === 403) {
         onTokenChange("");
-        setLoginError(sessionMessage(res, data));
+        setLoginError(
+          sessionMessage(res, data),
+        );
         return;
       }
       if (res.ok && data.admin) {
@@ -833,8 +845,12 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setCouponError(sessionMessage(res, data));
-          setLoginError(sessionMessage(res, data));
+          setCouponError(
+            sessionMessage(res, data),
+          );
+          setLoginError(
+            sessionMessage(res, data),
+          );
           return;
         }
         throw new Error(data.error || "Could not load coupons.");
@@ -880,7 +896,9 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setLoginError(sessionMessage(res, data));
+          setLoginError(
+            sessionMessage(res, data),
+          );
           return;
         }
         throw new Error(data.error || "Could not create coupon");
@@ -911,6 +929,19 @@ function AdminDashboard({ token, onTokenChange }) {
     });
     setEditingCouponCode(c.code);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const cancelEditCoupon = () => {
+    setEditingCouponCode(null);
+    setCouponError("");
+    setCouponForm({
+      code: "",
+      discountType: "percentage",
+      discountPercent: 10,
+      discountAmount: 500,
+      maxRedemptions: 1,
+      expiresAt: "",
+    });
   };
 
   const deleteCoupon = async (code) => {
@@ -959,7 +990,9 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setLoginError(sessionMessage(res, data));
+          setLoginError(
+            sessionMessage(res, data),
+          );
           return;
         }
         setLoginError(data.error || "Could not update banner.");
@@ -1013,17 +1046,14 @@ function AdminDashboard({ token, onTokenChange }) {
     if (!token) return;
     setActionBusyId(appId);
     try {
-      const res = await authedFetch(
-        `${API}/api/admin/applications/${appId}/status`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ status: nextStatus }),
+      const res = await authedFetch(`${API}/api/admin/applications/${appId}/status`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
-      );
+        body: JSON.stringify({ status: nextStatus }),
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok)
         throw new Error(
@@ -1039,7 +1069,7 @@ function AdminDashboard({ token, onTokenChange }) {
 
   const filteredApplications = applications.filter((item) => {
     const haystack =
-      `${item.fullName} ${item.email} ${item.reference} ${item.serviceName}`.toLowerCase();
+      `${item.fullName} ${item.email} ${item.phone || ""} ${item.reference} ${item.serviceName}`.toLowerCase();
     return haystack.includes(search.trim().toLowerCase());
   });
 
@@ -1144,6 +1174,28 @@ function AdminDashboard({ token, onTokenChange }) {
               </div>
             ))}
           </div>
+          {editingCouponCode && (
+            <p className="notice" role="status">
+              Editing coupon <strong>{editingCouponCode}</strong>. You can change
+              the code itself too.
+            </p>
+          )}
+          <input
+            type="text"
+            value={couponForm.code}
+            onChange={(e) =>
+              setCouponForm((f) => ({
+                ...f,
+                code: e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ""),
+              }))
+            }
+            placeholder={
+              editingCouponCode ? "Coupon code" : "Coupon code (blank = auto)"
+            }
+            maxLength={32}
+            aria-label="Coupon code"
+          />
+
           <select
             value={couponForm.discountType}
             onChange={(e) =>
@@ -1207,25 +1259,16 @@ function AdminDashboard({ token, onTokenChange }) {
           />
 
           <button className="submit" type="button" onClick={createCoupon}>
-            Create coupon
+            {editingCouponCode ? "Save changes" : "Create coupon"}
           </button>
+          {editingCouponCode && (
+            <button type="button" className="ghost" onClick={cancelEditCoupon}>
+              Cancel edit
+            </button>
+          )}
         </div>
         {couponError && <p className="notice notice-error">{couponError}</p>}
 
-        <div className="coupon-list">
-          {coupons.map((c) => (
-            <div key={c.code} className="coupon-item">
-              <strong>{c.code}</strong> —{" "}
-              {c.discount_type === "fixed"
-                ? `₦${Number(c.discount_amount || 0).toLocaleString()} off`
-                : `${c.discount_percent}% off`}{" "}
-              · {c.redeemed}/{c.max_redemptions} redeemed{" "}
-              {c.expires_at
-                ? `· expires ${new Date(c.expires_at).toLocaleDateString()}`
-                : null}
-            </div>
-          ))}
-        </div>
       </div>
 
       <div className="panel banner-settings-panel">
@@ -1362,7 +1405,30 @@ function AdminDashboard({ token, onTokenChange }) {
                     <td>
                       <div className="applicant-cell">
                         <strong>{item.fullName}</strong>
-                        <span>{item.email}</span>
+                        <span>
+                          <a
+                            href={mailtoLink(item)}
+                            title="Write an email to this applicant"
+                          >
+                            {item.email}
+                          </a>{" "}
+                          <a
+                            href={gmailLink(item)}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Compose in Gmail (opens a new tab)"
+                            style={{ fontSize: "0.8em" }}
+                          >
+                            (Gmail)
+                          </a>
+                        </span>
+                        {item.phone ? (
+                          <a href={telLink(item.phone)} className="mono">
+                            {item.phone}
+                          </a>
+                        ) : (
+                          <span className="muted">No phone</span>
+                        )}
                         <span className="mono">{item.reference}</span>
                       </div>
                     </td>

@@ -849,6 +849,83 @@ app.patch(
   },
 );
 
+// Remove payment-proof files from the private bucket (best effort)
+async function removeProofFiles(paths) {
+  const clean = (paths || []).filter(
+    (p) => typeof p === "string" && p && !/^https?:/i.test(p),
+  );
+  for (let i = 0; i < clean.length; i += 100) {
+    const { error } = await supabase.storage
+      .from(SUPABASE_BUCKET)
+      .remove(clean.slice(i, i + 100));
+    if (error) console.error("proof cleanup failed:", error.message);
+  }
+}
+
+// Admin: delete ALL applications (and their proof files)
+app.delete("/api/admin/applications", requireAdmin, async (req, res) => {
+  if (!ensureSupabase(res)) return;
+  if (req.query.confirm !== "DELETE_ALL") {
+    return res.status(400).json({ error: "Confirmation required." });
+  }
+
+  // Collect proof paths first so the files can be removed after the rows
+  const paths = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("applications")
+      .select("payment_proof_path")
+      .order("id")
+      .range(from, from + 999);
+    if (error) {
+      console.error("delete-all list failed:", error.message);
+      return res
+        .status(500)
+        .json({ error: `Could not delete applications: ${error.message}` });
+    }
+    paths.push(...(data || []).map((r) => r.payment_proof_path));
+    if (!data || data.length < 1000) break;
+  }
+
+  const { error, count } = await supabase
+    .from("applications")
+    .delete({ count: "exact" })
+    .not("id", "is", null);
+  if (error) {
+    console.error("delete-all failed:", error.message);
+    return res
+      .status(500)
+      .json({ error: `Could not delete applications: ${error.message}` });
+  }
+
+  await removeProofFiles(paths);
+  return res.json({ deleted: count ?? paths.length });
+});
+
+// Admin: delete one application (and its proof file)
+app.delete("/api/admin/applications/:id", requireAdmin, async (req, res) => {
+  if (!ensureSupabase(res)) return;
+  const { data, error } = await supabase
+    .from("applications")
+    .delete()
+    .eq("id", req.params.id)
+    .select("id, reference, payment_proof_path")
+    .maybeSingle();
+  if (error) {
+    if (error.code === "22P02") {
+      return res.status(404).json({ error: "Application not found." });
+    }
+    console.error("application delete failed:", error.message);
+    return res
+      .status(500)
+      .json({ error: `Could not delete application: ${error.message}` });
+  }
+  if (!data) return res.status(404).json({ error: "Application not found." });
+
+  await removeProofFiles([data.payment_proof_path]);
+  return res.json({ deleted: 1, reference: data.reference });
+});
+
 // Application: get a specific application (admin only)
 app.get("/api/applications/:id", requireAdmin, async (req, res) => {
   if (!ensureSupabase(res)) return;

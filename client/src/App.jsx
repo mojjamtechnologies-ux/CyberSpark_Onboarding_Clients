@@ -754,7 +754,8 @@ function AdminDashboard({ token, onTokenChange }) {
     let res = await send(accessToken);
     if (res.status === 401 && supabaseClient) {
       const { data } = await supabaseClient.auth.refreshSession();
-      if (data?.session?.access_token) res = await send(data.session.access_token);
+      if (data?.session?.access_token)
+        res = await send(data.session.access_token);
     }
     return res;
   };
@@ -773,9 +774,7 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setLoginError(
-            sessionMessage(res, data),
-          );
+          setLoginError(sessionMessage(res, data));
           return;
         }
         throw new Error(data.error || "Unable to load applications.");
@@ -800,9 +799,7 @@ function AdminDashboard({ token, onTokenChange }) {
       const data = await res.json().catch(() => ({}));
       if (res.status === 401 || res.status === 403) {
         onTokenChange("");
-        setLoginError(
-          sessionMessage(res, data),
-        );
+        setLoginError(sessionMessage(res, data));
         return;
       }
       if (res.ok && data.admin) {
@@ -845,12 +842,8 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setCouponError(
-            sessionMessage(res, data),
-          );
-          setLoginError(
-            sessionMessage(res, data),
-          );
+          setCouponError(sessionMessage(res, data));
+          setLoginError(sessionMessage(res, data));
           return;
         }
         throw new Error(data.error || "Could not load coupons.");
@@ -896,9 +889,7 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setLoginError(
-            sessionMessage(res, data),
-          );
+          setLoginError(sessionMessage(res, data));
           return;
         }
         throw new Error(data.error || "Could not create coupon");
@@ -990,9 +981,7 @@ function AdminDashboard({ token, onTokenChange }) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           onTokenChange("");
-          setLoginError(
-            sessionMessage(res, data),
-          );
+          setLoginError(sessionMessage(res, data));
           return;
         }
         setLoginError(data.error || "Could not update banner.");
@@ -1046,14 +1035,17 @@ function AdminDashboard({ token, onTokenChange }) {
     if (!token) return;
     setActionBusyId(appId);
     try {
-      const res = await authedFetch(`${API}/api/admin/applications/${appId}/status`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const res = await authedFetch(
+        `${API}/api/admin/applications/${appId}/status`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ status: nextStatus }),
         },
-        body: JSON.stringify({ status: nextStatus }),
-      });
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok)
         throw new Error(
@@ -1066,6 +1058,66 @@ function AdminDashboard({ token, onTokenChange }) {
       setActionBusyId("");
     }
   }
+
+  const deleteApplication = async (item) => {
+    if (
+      !confirm(
+        `Delete application ${item.reference} from ${item.fullName}?\n\nThis also removes their payment proof and cannot be undone.`,
+      )
+    )
+      return;
+    setActionBusyId(item.id);
+    setLoginError("");
+    try {
+      const res = await authedFetch(
+        `${API}/api/admin/applications/${encodeURIComponent(item.id)}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          onTokenChange("");
+          setLoginError(sessionMessage(res, data));
+          return;
+        }
+        throw new Error(data.error || "Could not delete application.");
+      }
+      await loadApplications();
+    } catch (err) {
+      setLoginError(err.message || "Could not delete application.");
+    } finally {
+      setActionBusyId("");
+    }
+  };
+
+  const deleteAllApplications = async () => {
+    const typed = window.prompt(
+      `This permanently deletes ALL ${summary.total} applications and their payment proofs.\n\nType DELETE to confirm.`,
+    );
+    if (typed !== "DELETE") return;
+    setActionBusyId("ALL");
+    setLoginError("");
+    try {
+      const res = await authedFetch(
+        `${API}/api/admin/applications?confirm=DELETE_ALL`,
+        { method: "DELETE" },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          onTokenChange("");
+          setLoginError(sessionMessage(res, data));
+          return;
+        }
+        throw new Error(data.error || "Could not delete applications.");
+      }
+      await loadApplications();
+    } catch (err) {
+      setLoginError(err.message || "Could not delete applications.");
+    } finally {
+      setActionBusyId("");
+    }
+  };
 
   const filteredApplications = applications.filter((item) => {
     const haystack =
@@ -1176,8 +1228,8 @@ function AdminDashboard({ token, onTokenChange }) {
           </div>
           {editingCouponCode && (
             <p className="notice" role="status">
-              Editing coupon <strong>{editingCouponCode}</strong>. You can change
-              the code itself too.
+              Editing coupon <strong>{editingCouponCode}</strong>. You can
+              change the code itself too.
             </p>
           )}
           <input
@@ -1268,7 +1320,6 @@ function AdminDashboard({ token, onTokenChange }) {
           )}
         </div>
         {couponError && <p className="notice notice-error">{couponError}</p>}
-
       </div>
 
       <div className="panel banner-settings-panel">
@@ -1353,7 +1404,7 @@ function AdminDashboard({ token, onTokenChange }) {
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Name, email or reference"
+              placeholder="Name, email, phone or reference"
             />
           </label>
           <label className="field compact-field">
@@ -1370,6 +1421,19 @@ function AdminDashboard({ token, onTokenChange }) {
               ))}
             </select>
           </label>
+        </div>
+        <div className="admin-actions" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="mini-action"
+            style={{ color: "#b3261e" }}
+            disabled={!summary.total || actionBusyId === "ALL"}
+            onClick={deleteAllApplications}
+          >
+            {actionBusyId === "ALL"
+              ? "Deleting…"
+              : `Delete all applications (${summary.total})`}
+          </button>
         </div>
       </div>
 
@@ -1475,6 +1539,15 @@ function AdminDashboard({ token, onTokenChange }) {
                               : `Mark ${status}`}
                           </button>
                         ))}
+                        <button
+                          type="button"
+                          className="mini-action"
+                          style={{ color: "#b3261e" }}
+                          disabled={actionBusyId === item.id}
+                          onClick={() => deleteApplication(item)}
+                        >
+                          Delete
+                        </button>
                       </div>
                     </td>
                   </tr>
